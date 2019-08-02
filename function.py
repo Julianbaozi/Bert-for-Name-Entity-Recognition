@@ -54,7 +54,7 @@ def read_data(config, path):
             sent_ind = d['sent_ind']
             cve_sent_ind = 0
             
-    with open('results/cpe.pkl','rb') as f:
+    with open('data/cpe.pkl','rb') as f:
         cve_cpe_pnames,cve_cpe_vendors = pk.load(f)
     words = add_pname(data, cve_cpe_pnames)
     sentences = [" ".join([s[0] for s in sent]) for sent in words]
@@ -343,10 +343,6 @@ def train(config, model, dataloader, if_plot=True, fold_id=None):
                 print("Macro F1-Score: {}".format(f1))
                 print('')
 
-    if config['test_size']:    
-        print('The best result: ')
-        print('Validation Accuracy: {}, Macro F1-Score: {}'.format(max_acc, max_f1))
-    
     if if_plot:
 #     pk.dump((tr_loss_list, eval_loss_list, eval_acc_list, f1_list), open("results/train_result.pkl",'wb'))
     
@@ -363,4 +359,11 @@ def train(config, model, dataloader, if_plot=True, fold_id=None):
         plt.show()
         plt.savefig('results/train_img{}.png'.format(fold_id))
         
-    return best_model, max_acc, max_f1
+    if config['test_size']:    
+        print('The best result: ')
+        print('Validation Accuracy: {}, Macro F1-Score: {}'.format(max_acc, max_f1))
+        return best_model, max_acc, max_f1
+    else:
+        return model, None, None
+    
+        
