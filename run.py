@@ -55,8 +55,10 @@ if __name__ == "__main__":
         #     weight = None
         model = BuildModel(config, weight)
         model, max_acc, max_f1 = train(config, model, dataloader, if_plot=True)
-
-        pk.dump(model,open('results/model_weighted.pkl','wb')) #output_path = "results"
-        predictions, true_labels, eval_loss, eval_accuracy, f1 = test(config, model, dataloader[1], validation = False, tags_vals=tags_vals)
+        
+        with open('results/model_weighted.pkl','wb') as fp: #output_path = "results"
+            pk.dump(model,fp) 
+        if config['test_size']:
+            predictions, true_labels, eval_loss, eval_accuracy, f1 = test(config, model, dataloader[1], validation = False, tags_vals=tags_vals)
 
 
