@@ -29,12 +29,13 @@ def add_pname(data, cve_cpe_pnames):
         add_sent, add_label = add(cve_cpe_pnames[s.name[0]])
         new_sent = add_sent + s["token"].values.tolist()
         new_tag = add_label + s["label"].values.tolist()
-        return [(w, t) for w, t in zip(new_sent, new_tag)]
+        return [(w, t) for w, t in zip(new_sent, new_tag)], len(add_label)
 
 
     grouped = data.groupby(['sent_ind','cve_sent_ind']).apply(agg_func)
-    words = [w for w in grouped]
-    return words
+    words = [w[0] for w in grouped]
+    add_len = [w[1] for w in grouped]
+    return words, add_len
 
 def read_data(config, path):
     data = pd.read_csv(path, encoding="latin1").fillna(method="ffill")
@@ -56,19 +57,19 @@ def read_data(config, path):
             
     with open('data/cpe.pkl','rb') as f:
         cve_cpe_pnames,cve_cpe_vendors = pk.load(f)
-    words = add_pname(data, cve_cpe_pnames)
+    words, add_len = add_pname(data, cve_cpe_pnames)
     sentences = [" ".join([s[0] for s in sent]) for sent in words]
     labels = [[s[1] for s in sent] for sent in words]
     substitue = config['substitue']
     tags_vals = list(set(data["label"].values)) + [substitue]
     tag2idx = {t: i for i, t in enumerate(tags_vals)}
-    return words, sentences, labels, tags_vals, tag2idx
+    return words, sentences, labels, tags_vals, tag2idx, add_len
 
 from pytorch_pretrained_bert import BertTokenizer, BertConfig, BertModel
 from keras.preprocessing.sequence import pad_sequences
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
 
-def vectorization(config, sentences, labels, tags_vals, tag2idx):
+def vectorization(config, sentences, labels, tags_vals, tag2idx, add_len):
     #use bert tokenization and substitute label
     #vectorize and pad dataset
     tokenizer = BertTokenizer.from_pretrained(config['name'], do_lower_case=config['do_lower_case'])
@@ -104,7 +105,10 @@ def vectorization(config, sentences, labels, tags_vals, tag2idx):
                          maxlen=MAX_LEN, value=tag2idx["O"], padding="post",
                          dtype="long", truncating="post")
     attention_masks = np.array([[float(i>0) for i in ii] for ii in input_ids])
-    data_fold = (input_ids, tags, attention_masks)
+    add_masks = np.ones((tags.shape[0], MAX_LEN))
+    for i in range(tags.shape[0]):
+        add_masks[i, :add_len[i]] = 0
+    data_fold = (input_ids, tags, attention_masks, add_masks)
     return data_fold
 
 from sklearn.model_selection import train_test_split
@@ -116,17 +120,19 @@ def myDataLoader(config, data_fold, train_index=None, test_index=None):
     bs = config['bs']
     test_size = config['test_size']
     if_cross_val = config['if_cross_val']
-    input_ids, tags, attention_masks = data_fold
+    input_ids, tags, attention_masks, add_masks = data_fold
     
     if if_cross_val:
         tr_inputs, val_inputs = input_ids[train_index], input_ids[test_index]
         tr_tags, val_tags = tags[train_index], tags[test_index]
         tr_masks, val_masks = attention_masks[train_index], attention_masks[test_index]
-    
+        tr_add_masks, val_add_masks = add_masks[train_index], add_masks[test_index]
     else:
         tr_inputs, val_inputs, tr_tags, val_tags = train_test_split(input_ids, tags, 
                                                                 random_state=1, test_size=test_size)
         tr_masks, val_masks, _, _ = train_test_split(attention_masks, input_ids,
+                                             random_state=1, test_size=test_size)
+        tr_add_masks, val_add_masks, _, _ = train_test_split(add_masks, input_ids,
                                              random_state=1, test_size=test_size)
     
     tr_inputs = torch.tensor(tr_inputs)
@@ -135,12 +141,14 @@ def myDataLoader(config, data_fold, train_index=None, test_index=None):
     val_tags = torch.tensor(val_tags)
     tr_masks = torch.tensor(tr_masks)
     val_masks = torch.tensor(val_masks)
+    tr_add_masks = torch.tensor(tr_add_masks)
+    val_add_masks = torch.tensor(val_add_masks)
     
-    train_data = TensorDataset(tr_inputs, tr_masks, tr_tags)
+    train_data = TensorDataset(tr_inputs, tr_masks, tr_tags, tr_add_masks)
     train_sampler = RandomSampler(train_data)
     train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=bs, drop_last=False)
 
-    valid_data = TensorDataset(val_inputs, val_masks, val_tags)
+    valid_data = TensorDataset(val_inputs, val_masks, val_tags, val_add_masks)
     valid_sampler = SequentialSampler(valid_data)
     valid_dataloader = DataLoader(valid_data, sampler=valid_sampler, batch_size=bs, drop_last=False)
     dataloader = (train_dataloader, valid_dataloader)
@@ -179,7 +187,8 @@ def BuildModel(config, weight=None):
     
     return model
 
-from sklearn.metrics import confusion_matrix ,f1_score, accuracy_score, classification_report
+from sklearn.metrics import confusion_matrix, accuracy_score, precision_score, recall_score,classification_report
+from sklearn.metrics import fbeta_score, precision_recall_fscore_support
 
 def test(config, model, dataloader, validation = False, tags_vals = None):
     #dataloader is only validation data or test data
@@ -189,12 +198,12 @@ def test(config, model, dataloader, validation = False, tags_vals = None):
     predictions , true_labels = [], []
     for batch in dataloader:
         batch = tuple(t.to(config['device']) for t in batch)
-        b_input_ids, b_input_mask, b_labels = batch
+        b_input_ids, b_input_mask, b_labels, b_add_masks = batch
         with torch.no_grad():
             tmp_eval_loss = model(b_input_ids, token_type_ids=None, attention_mask=b_input_mask, labels=b_labels)
             logits = model(b_input_ids, token_type_ids=None, attention_mask=b_input_mask)
         
-        active = ((b_input_mask.view(-1) == 1) * (b_labels.view(-1) != config['num_labels']-1))
+        active = ((b_input_mask.view(-1) == 1) * (b_labels.view(-1) != config['num_labels']-1)) * (b_add_masks.view(-1) == 1)
         active_logits = logits.view(-1, config['num_labels'])[active].cpu().numpy()
         active_labels = b_labels.view(-1)[active].cpu().numpy()
         pred_labels = np.argmax(active_logits, axis=1)
@@ -216,15 +225,18 @@ def test(config, model, dataloader, validation = False, tags_vals = None):
     true_labels = np.concatenate(true_labels)
     
     eval_accuracy = accuracy_score(true_labels, predictions, normalize=True, sample_weight=None)
-    f1 = f1_score(true_labels, predictions, average='macro')
+    fbeta = fbeta_score(true_labels, predictions, average='macro', beta=config['beta'])
+    precision = precision_score(true_labels, predictions, average='macro')
+    recall = recall_score(true_labels, predictions, average='macro')
+    
     if validation==True:
-        return eval_loss, eval_accuracy, f1
+        return eval_loss, eval_accuracy, fbeta, precision, recall
     else:
         print("Test loss: {}".format(eval_loss))
         print("Test Accuracy: {}".format(eval_accuracy))
-        print("micro F1-Score: {}".format(f1_score(true_labels, predictions, average='micro',)))
-        print("macro F1-Score: {}".format(f1))
-        print("weighted F1-Score: {}".format(f1_score(true_labels, predictions, average='weighted')))
+        print("macro Fbeta-Score: {}".format(fbeta))
+        print("Precision: {}".format(precision))
+        print("Recall: {}".format(recall))
         
         pred_tags = [tags_vals[p] for p in predictions]
         valid_tags = [tags_vals[l] for l in true_labels]
@@ -245,7 +257,7 @@ def test(config, model, dataloader, validation = False, tags_vals = None):
         print(cfs_with_index)
         sn.heatmap(cfs_with_index_norm)
         print('')
-        return predictions, true_labels, eval_loss, eval_accuracy, f1
+        return predictions, true_labels, eval_loss, eval_accuracy, fbeta, precision, recall
     
 from torch.optim import Adam
 import matplotlib.pyplot as plt
@@ -278,20 +290,24 @@ def train(config, model, dataloader, if_plot=True, fold_id=None):
     tr_loss_list = []
     eval_loss_list = []
     eval_acc_list = []
-    f1_list = []
+    fbeta_list = []
+    precision_list = []
+    recall_list = []
     max_acc = 0
-    max_f1 = 0
+    max_fbeta = 0
+    mas_precision = 0
+    max_recall = 0
     
     train_dataloader, valid_dataloader = dataloader
     
-    if config['test_size']:
-        eval_loss, eval_accuracy, f1 = test(config, model, dataloader=valid_dataloader, validation=True)
+    if not config['if_cross_val'] and config['test_size']:
+        eval_loss, eval_accuracy, fbeta, precision, recall = test(config, model, dataloader=valid_dataloader, validation=True)
         # print train loss per epoch
         print('Epoch: {}'.format(0))
         # VALIDATION on validation set
         print("Validation loss: {}".format(eval_loss))
         print("Validation Accuracy: {}".format(eval_accuracy))
-        print("Macro F1-Score: {}".format(f1))
+        print("Macro Fbeta-Score: {}".format(fbeta))
         print('')
     
     for epoch in range(1, epochs+1):
@@ -303,7 +319,7 @@ def train(config, model, dataloader, if_plot=True, fold_id=None):
         for step, batch in enumerate(train_dataloader):
             # add batch to gpu
             batch = tuple(t.to(config['device']) for t in batch)
-            b_input_ids, b_input_mask, b_labels = batch
+            b_input_ids, b_input_mask, b_labels, b_add_masks = batch
             # forward pass
             loss = model(b_input_ids, token_type_ids=None,
                          attention_mask=b_input_mask, labels=b_labels)
@@ -318,52 +334,63 @@ def train(config, model, dataloader, if_plot=True, fold_id=None):
             # update parameters
             optimizer.step()
             model.zero_grad()
-        tr_loss = tr_loss/nb_tr_steps
-        print('Epoch: {}'.format(epoch))
-        print("Train loss: {}".format(tr_loss))
+#         tr_loss = tr_loss/nb_tr_steps
+#         print('Epoch: {}'.format(epoch))
+#         print("Train loss: {}".format(tr_loss))
         
-        if config['test_size']:
-            eval_loss, eval_accuracy, f1 = test(config, model, valid_dataloader, validation = True)
+        if  config['if_cross_val'] or config['test_size']:
+            eval_loss, eval_accuracy, fbeta, precision, recall = test(config, model, valid_dataloader, validation = True)
 
-            if eval_accuracy>max_acc:
+            if recall>max_recall:
                 max_acc = eval_accuracy
-                max_f1 = f1
+                max_fbeta = fbeta
+                max_precision = precision
+                max_recall = recall
                 best_model = deepcopy(model)
-
-            tr_loss_list.append(tr_loss)
-            eval_loss_list.append(eval_loss)
-            eval_acc_list.append(eval_accuracy)
-            f1_list.append(f1)
+                
+            if if_plot:
+                tr_loss_list.append(tr_loss)
+                eval_loss_list.append(eval_loss)
+                eval_acc_list.append(eval_accuracy)
+                fbeta_list.append(fbeta)
+                precision_list.append(precision)
+                recall_list.append(recall)
 
             if epoch % period == 0:
                 # print train loss per epoch
                 # VALIDATION on validation set
                 print("Validation loss: {}".format(eval_loss))
                 print("Validation Accuracy: {}".format(eval_accuracy))
-                print("Macro F1-Score: {}".format(f1))
+                print("Macro Fbeta-Score: {}".format(fbeta))
+                print("Macro Precision: {}".format(precision))
+                print("Macro Recall: {}".format(recall))
                 print('')
 
     if if_plot:
-#     pk.dump((tr_loss_list, eval_loss_list, eval_acc_list, f1_list), open("results/train_result.pkl",'wb'))
+#     pk.dump((tr_loss_list, eval_loss_list, eval_acc_list, fbeta_list), open("results/train_result.pkl",'wb'))
     
-        ax1=plt.subplot(1, 3, 1)
-        ax2=plt.subplot(1, 3, 2)
-        ax3=plt.subplot(1, 3, 3)
+        ax1=plt.subplot(1, 4, 1)
+        ax2=plt.subplot(1, 4, 2)
+        ax3=plt.subplot(1, 4, 3)
+        ax3=plt.subplot(1, 4, 4)
 
         ax1.plot(tr_loss_list)
         ax1.plot(eval_loss_list)
 
         ax2.plot(eval_acc_list)
 
-        ax3.plot(f1_list)
+        ax3.plot(fbeta_list)
+        
+        ax4.plot(recall_list)
+        
         plt.show()
         plt.savefig('results/train_img{}.png'.format(fold_id))
         
-    if config['test_size']:    
+    if config['if_cross_val'] or config['test_size']:    
         print('The best result: ')
-        print('Validation Accuracy: {}, Macro F1-Score: {}'.format(max_acc, max_f1))
-        return best_model, max_acc, max_f1
+        print('Validation Accuracy: {}, Macro Fbeta-Score: {}, Macro Precision: {}, Macro Recall: {}'.format(max_acc, max_fbeta, max_precision, max_recall))
+        return best_model, max_acc, max_fbeta, max_precision, max_recall
     else:
-        return model, None, None
+        return model, None, None, None
     
         

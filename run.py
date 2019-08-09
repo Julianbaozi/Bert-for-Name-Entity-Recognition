@@ -30,6 +30,7 @@ if __name__ == "__main__":
         f = 1
         eval_accuracy_fold = [] 
         f1_fold = []
+        recall_fold = []
         for train_index, test_index in kfold.split(data_fold[0]):
             dataloader, count = myDataLoader(config, data_fold, train_index, test_index)
 
@@ -39,14 +40,17 @@ if __name__ == "__main__":
             print('Fold {}:'.format(f))
             model = None
             model = BuildModel(config, weight)
-            _, eval_accuracy, f1 = train(config, model, dataloader, if_plot=False, fold_id=f)
+            _, eval_accuracy, f1, recall = train(config, model, dataloader, if_plot=False, fold_id=f)
             eval_accuracy_fold.append(eval_accuracy)
             f1_fold.append(f1)
+            recall_fold.append(recall)
             f+=1
         print('accuracy of folds: {}'.format(eval_accuracy_fold))
         print('average accuracy: {}'.format(sum(eval_accuracy_fold)/fold_num))
         print('f1 of folds: {}'.format(f1_fold))
         print('average f1: {}'.format(sum(f1_fold)/fold_num))
+        print('recall of folds: {}'.format(recall_fold))
+        print('average recall: {}'.format(sum(recall_fold)/fold_num))
 
     else:
         dataloader, count = myDataLoader(config, data_fold)
@@ -54,11 +58,11 @@ if __name__ == "__main__":
         weight = torch.tensor(weight)
         #     weight = None
         model = BuildModel(config, weight)
-        model, max_acc, max_f1 = train(config, model, dataloader, if_plot=True)
+        model, max_acc, max_f1, max_recall = train(config, model, dataloader, if_plot=True)
         
         with open('results/model_weighted.pkl','wb') as fp: #output_path = "results"
             pk.dump(model,fp) 
         if config['test_size']:
-            predictions, true_labels, eval_loss, eval_accuracy, f1 = test(config, model, dataloader[1], validation = False, tags_vals=tags_vals)
+            predictions, true_labels, eval_loss, eval_accuracy, f1, precision, recall = test(config, model, dataloader[1], validation = False, tags_vals=tags_vals)
 
 
