@@ -5,14 +5,14 @@ import torch.nn as nn
 import pickle as pk
 from sklearn.model_selection import KFold
 from config import config
-from function import *
+from bert_function import *
 
 if __name__ == "__main__":
 
     import warnings
     warnings.filterwarnings('once')
 
-    words, sentences, labels, tags_vals, tag2idx = read_data(config, "data/dataset.csv") #data_path = "data/dataset.csv"
+    words, sentences, labels, tags_vals, tag2idx = read_data(config, "data/dataset.csv")
     config['num_labels'] = len(tag2idx)
     data_fold = vectorization(config, sentences, labels, tags_vals, tag2idx)
 
@@ -34,7 +34,6 @@ if __name__ == "__main__":
         for train_index, test_index in kfold.split(data_fold[0]):
             dataloader, count = myDataLoader(config, data_fold, train_index, test_index)
 
-#             weight = torch.tensor(np.log(max(count)/count)+config['mu'])
             weight = None
             print('')
             print('Fold {}:'.format(f))
@@ -54,9 +53,7 @@ if __name__ == "__main__":
 
     else:
         dataloader, count = myDataLoader(config, data_fold)
-        weight = np.log(max(count)/count)+config['mu']
-        weight = torch.tensor(weight)
-        #     weight = None
+        weight = None
         model = BuildModel(config, weight)
         model, max_acc, max_f1, max_recall = train(config, model, dataloader, if_plot=True)
         
