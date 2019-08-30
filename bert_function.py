@@ -175,6 +175,8 @@ def BuildModel(config, weight=None):
             return logits
     BertForTokenClassification.forward = new_forward
     model = BertForTokenClassification.from_pretrained(config['name'], num_labels=config['num_labels'])
+#     if torch.cuda.device_count() > 1:
+#         model = nn.DataParallel(model)
     model.to(config['device'])
     
     return model
@@ -202,7 +204,7 @@ def test(config, model, dataloader, validation = False, tags_vals = None):
         predictions.append(pred_labels)
         true_labels.append(active_labels)
         
-        eval_loss += tmp_eval_loss.mean().item()
+        eval_loss += tmp_eval_loss.item()
         
         nb_eval_examples += b_input_ids.size(0)
         nb_eval_steps += 1
@@ -308,7 +310,7 @@ def train(config, model, dataloader, if_plot=True, fold_id=None):
             b_input_ids, b_input_mask, b_labels, b_add_masks = batch
             # forward pass
             loss = model(b_input_ids, token_type_ids=None,
-                         attention_mask=b_input_mask, add_masks=b_add_masks, labels=b_labels)
+                         attention_mask=b_input_mask, add_masks=b_add_masks, labels=b_labels).mean()
             # backward pass
             loss.backward()
             # track train loss

@@ -11,7 +11,7 @@ config = {
     'dropout' : 0.1, #dropout rate
     'decay' : 1e-3, #weight decay
     'lr' : 8e-5, #learning rate
-    'mu' : 1, #parameter in computing weights
+    'mu' : 1.4, #parameter in computing weights
     'beta' : 2, #ratio of recall over precision
     'FULL_FINETUNING' : True, #if finetune bert or not
     'max_grad_norm' : 1.0, #grad clipping
