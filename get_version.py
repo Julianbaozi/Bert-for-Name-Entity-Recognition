@@ -134,7 +134,9 @@ def get_version(sequence, tags):
                     tag_register = {'pn':tag_register['pn']}
                 tag_register[tj] = sequence[j]
                 
-                if tj in ['version','vr','vrs','vre']:
+                if tj == 'all':
+                    tag_register['all' ]= 'all'
+                elif tj in ['version','vr','vrs','vre']:
                     if 'vs_now' in tag_register and tag_register['vs_now']=='':
                         tag_register['update'][tj] = tag_register['update']['']
                         tag_register['update'].pop('')
