@@ -13,7 +13,7 @@ Notes for the model (In the brackets are other methods I tried with worse perfor
   (against adding nothing and adding both vendor name and product name)
 3. Use substitute string 'X' to tag postfixes after WordPiece tokenization.
   (against using the same tag)
-4. Ignore loss of head sentence, sustitutes and padded elements. Do the same when calculating all metrics.
+4. Ignore loss of head sentence, substitutes and padded elements. Do the same when calculating all metrics.
   (against using them)
 5. Use weight scheme log(max(f)/f)+mu, where f is the tag frequency and mu is hyperparameter.
   (against no weight or max(mu*log(sum(f)/f), 1) or (max(f)/f)^mu)
